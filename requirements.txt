@@ -1,0 +1,16 @@
+beautifulsoup4==4.12.3
+certifi==2024.7.4
+charset-normalizer==3.3.2
+colorama==0.4.6
+exceptiongroup==1.2.2
+idna==3.7
+iniconfig==2.0.0
+packaging==24.1
+pluggy==1.5.0
+pytest==8.3.2
+PyYAML==6.0.2
+requests==2.32.3
+responses==0.25.3
+soupsieve==2.5
+tomli==2.0.1
+urllib3==2.2.2
