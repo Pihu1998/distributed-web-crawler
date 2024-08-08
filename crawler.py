@@ -2,9 +2,10 @@ import requests
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin, urlparse
 import threading
-from queue import Queue
+import queue
 import time
 import logging
+import regex as re
 
 class WebCrawler:
     def __init__(self, start_url, max_threads=5, delay=1): 
@@ -28,8 +29,8 @@ class WebCrawler:
         self.start_url = start_url
         self.base_domain = urlparse(start_url).netloc 
         self.visited_urls = set() 
-        self.url_queue = Queue() 
-        self.url_queue.put(start_url)
+        self.url_queue = queue.PriorityQueue() # Use priority queue
+        self.url_queue.put((0.5, start_url))
         self.max_threads = max_threads
         self.delay = delay 
         self.lock = threading.Lock()    
@@ -114,8 +115,14 @@ class WebCrawler:
             links = self.extract_links(soup, url)
             self.logger.info(f"Links found: {links}\n")
             for link in links:
-                if link not in self.visited_urls and self.is_same_domain(link):
-                    self.url_queue.put(link)
+                if link not in self.visited_urls and self.is_same_domain(link) and \
+                    link not in [item[1] for item in self.url_queue]:
+                    #Default priority score
+                    priority_score = 1
+                    # If the current URL refer to a pagination page
+                    if re.match(r"^https://monzo\.com/blog/page/\d+/?$", url):
+                        priority_score = 0.5
+                    self.url_queue.put((priority_score, link))
         except requests.RequestException as e:
             self.logger.error(f"Failed to fetch {url}: {e}")
 
