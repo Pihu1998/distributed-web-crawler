@@ -1,12 +1,13 @@
 import requests
 from bs4 import BeautifulSoup
-from urllib.parse import urljoin, urlparse
+from urllib import urljoin, urlparse, robotparser
 import threading
 import queue
 import time
 import logging
 import regex as re
 import hashlib
+import json
 
 class WebCrawler:
     def __init__(self, start_url, exclude_patterns, max_threads=5, delay=1): 
@@ -22,7 +23,7 @@ class WebCrawler:
             start_url (str): The starting URL for the web crawler.
             base_domain (str): The base domain extracted from the starting URL.
             visited_urls (set): A set to store visited URLs and avoid duplicates.
-            url_queue (Queue): A queue to manage URLs to be crawled.
+            url_queue (Queue): A queue to manage URLs to be crawled, in BFS order.
             max_threads (int): The maximum number of threads to be used for crawling.
             delay (int): The delay between HTTP requests.
             lock (Lock): A threading lock for synchronization.
@@ -32,7 +33,8 @@ class WebCrawler:
         self.visited_urls = set()
         self.content_hashes = set()
         self.exclude_patterns = exclude_patterns or [] # Exclude URLs containing these patterns
-        self.url_queue = queue.PriorityQueue() # Use priority queue
+        self.url_queue = queue.PriorityQueue() # Use priority queue. deque[start_url] can be used to \
+        #extend it to both BFS and DFS.
         self.url_queue.put((0.5, start_url))
         self.max_threads = max_threads
         self.delay = delay 
@@ -74,28 +76,7 @@ class WebCrawler:
             self.visit_url(current_url)
             time.sleep(self.delay)
             self.url_queue.task_done()
-
-    def extract_links(self, soup: BeautifulSoup, base_url: str) -> list:
-        """
-        Extracts and returns a list of urls within the same domain.
-
-        Args:
-            soup (BeautifulSoup): A BeautifulSoup object containing the parsed HTML content.
-            base_url (str): The base URL to resolve relative links.
-
-        Returns:
-            list: A list of full URLs that are within the same domain as the base URL.
-        """
-        links = []
-        for anchor in soup.find_all('a', href=True):
-            href = anchor['href']
-            # Normalize url to standard format to avoid duplicate scraping
-            full_url = urljoin(base_url, href)
-            if self.is_same_domain(full_url) and self.should_visit(full_url):
-                links.append(full_url)
-
-        return links
-
+    
     def visit_url(self, url: str) -> None:
         """
         Visits the given URL, fetches its content, and extracts links from it.
@@ -121,6 +102,7 @@ class WebCrawler:
                 self.logger.info(f"Visited: {url}")
                 links = self.extract_links(soup, url)
                 self.logger.info(f"Links found: {links}\n")
+
                 for link in links:
                     if link not in self.visited_urls and self.is_same_domain(link) and \
                         link not in [item[1] for item in self.url_queue]:
@@ -133,6 +115,42 @@ class WebCrawler:
         except requests.RequestException as e:
             self.logger.error(f"Failed to fetch {url}: {e}")
 
+    def extract_links(self, soup: BeautifulSoup, base_url: str) -> list:
+        """
+        Extracts and returns a list of urls within the same domain.
+
+        Args:
+            soup (BeautifulSoup): A BeautifulSoup object containing the parsed HTML content.
+            base_url (str): The base URL to resolve relative links.
+
+        Returns:
+            list: A list of full URLs that are within the same domain as the base URL.
+        """
+        links = []
+        for anchor in soup.find_all('a', href=True):
+            href = anchor['href']
+            # Normalize url to standard format to avoid duplicate scraping
+            full_url = urljoin(base_url, href)
+            if self.is_same_domain(full_url) and self.should_visit(full_url):
+                links.append(full_url)
+
+        return links
+    
+    def robot_parser(self):
+        """
+        Fetches and parses the robots.txt file
+        """
+        rp = robotparser.RobotFileParser()
+        rp.set_url(urljoin(self.start_url + "/robots.txt"))
+        rp.read()
+        return rp
+    
+    def is_allowed_by_robots(self, url):
+        """
+        Check if the given url is allowed by robots.txt
+        """
+        return self.robot_parser.can_fetch("*", url)
+    
     def is_same_domain(self, url: str) -> bool:
         """
         Checks if the given URL belongs to the same domain as the base domain.
@@ -146,7 +164,7 @@ class WebCrawler:
         parsed_url = urlparse(url)
         return parsed_url.netloc == self.base_domain
 
-    def should_visit(self, url):
+    def should_visit(self, url: str) -> bool:
         for pattern in self.exclude_patterns:
             if re.search(pattern, url):
                 return False
