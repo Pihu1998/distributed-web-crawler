@@ -166,7 +166,7 @@ class WebCrawler:
 
     def should_visit(self, url: str) -> bool:
         for pattern in self.exclude_patterns:
-            if re.search(pattern, url):
+            if re.search(pattern, url) or not self.is_allowed_by_robots(url):
                 return False
         return True
 
