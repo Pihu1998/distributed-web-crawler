@@ -6,9 +6,10 @@ import queue
 import time
 import logging
 import regex as re
+import hashlib
 
 class WebCrawler:
-    def __init__(self, start_url, max_threads=5, delay=1): 
+    def __init__(self, start_url, exclude_patterns, max_threads=5, delay=1): 
         """
         Initializes a web crawler object with the provided parameters.
 
@@ -28,12 +29,14 @@ class WebCrawler:
         """
         self.start_url = start_url
         self.base_domain = urlparse(start_url).netloc 
-        self.visited_urls = set() 
+        self.visited_urls = set()
+        self.content_hashes = set()
+        self.exclude_patterns = exclude_patterns or [] # Exclude URLs containing these patterns
         self.url_queue = queue.PriorityQueue() # Use priority queue
         self.url_queue.put((0.5, start_url))
         self.max_threads = max_threads
         self.delay = delay 
-        self.lock = threading.Lock()    
+        self.lock = threading.Lock() 
         self.logger = logging.getLogger(__name__) 
 
     def crawl(self) -> None:
@@ -86,9 +89,11 @@ class WebCrawler:
         links = []
         for anchor in soup.find_all('a', href=True):
             href = anchor['href']
+            # Normalize url to standard format to avoid duplicate scraping
             full_url = urljoin(base_url, href)
-            if self.is_same_domain(full_url):
+            if self.is_same_domain(full_url) and self.should_visit(full_url):
                 links.append(full_url)
+
         return links
 
     def visit_url(self, url: str) -> None:
@@ -110,19 +115,21 @@ class WebCrawler:
         try:
             response = requests.get(url)
             response.raise_for_status()
-            soup = BeautifulSoup(response.text, 'html.parser')
-            self.logger.info(f"Visited: {url}")
-            links = self.extract_links(soup, url)
-            self.logger.info(f"Links found: {links}\n")
-            for link in links:
-                if link not in self.visited_urls and self.is_same_domain(link) and \
-                    link not in [item[1] for item in self.url_queue]:
-                    #Default priority score
-                    priority_score = 1
-                    # If the current URL refer to a pagination page
-                    if re.match(r"^https://monzo\.com/blog/page/\d+/?$", url):
-                        priority_score = 0.5
-                    self.url_queue.put((priority_score, link))
+            # Checking if the content is duplicate before processing further
+            if not self.is_duplicate_content(response.text):
+                soup = BeautifulSoup(response.text, 'html.parser')
+                self.logger.info(f"Visited: {url}")
+                links = self.extract_links(soup, url)
+                self.logger.info(f"Links found: {links}\n")
+                for link in links:
+                    if link not in self.visited_urls and self.is_same_domain(link) and \
+                        link not in [item[1] for item in self.url_queue]:
+                        #Default priority score
+                        priority_score = 1
+                        # If the current URL refer to a pagination page
+                        if re.match(r"^https://monzo\.com/blog/page/\d+/?$", url):
+                            priority_score = 0.5
+                        self.url_queue.put((priority_score, link))
         except requests.RequestException as e:
             self.logger.error(f"Failed to fetch {url}: {e}")
 
@@ -138,8 +145,26 @@ class WebCrawler:
         """
         parsed_url = urlparse(url)
         return parsed_url.netloc == self.base_domain
+
+    def should_visit(self, url):
+        for pattern in self.exclude_patterns:
+            if re.search(pattern, url):
+                return False
+        return True
+
+    def is_duplicate_content(self, content: str):
+        """
+        Use SHA256-based content hashing to check for any duplicate data scraped
+        """
+        hash_content = hashlib.sha256(content.encode('utf-8')).hexdigest()
+        if hash_content in self.content_hashes:
+            return True
+        
+        self.content_hashes.add(hash_content)
+        return True
     
 if __name__ == "__main__":
     start_url = "https://monzo.com/"
-    crawler = WebCrawler(start_url)
+    exclude_list = [r'login', r'signin', r'signup', r'logout']
+    crawler = WebCrawler(start_url, exclude_list)
     crawler.crawl()
